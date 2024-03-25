@@ -1,3 +1,5 @@
+`timescale 1ns / 1ps
+
 // ip => Image Processing
 // pc => Physics Core
 // gr => Graphics Rendering
@@ -19,6 +21,7 @@
 module physics_core (
    input wire		    aclk,	    // 25 MHz
    input wire		    aresetn,
+   input wire           start,
    
    // Incoming Raw Coordinates from Image Processing
    input wire [23:0]	ip_pc_paddle_1_X,
@@ -46,27 +49,60 @@ module physics_core (
 );
 
 // Constants and Reset Values
-localparam SCALE = 256;
-localparam [23:0] TABLE_DIMS [2:0] = '{24'd762 * SCALE, 24'd1370 * SCALE, 24'd15 * SCALE};
-localparam [23:0] NET_DIMS [2:0] = '{24'd762 * SCALE, 24'd10 * SCALE, 24'd30 * SCALE};
-localparam [23:0] PADDLE_DIMS [2:0] = '{24'd60 * SCALE, 24'd10 * SCALE, 24'd70 * SCALE};
-localparam [23:0] BALL_RADIUS = 24'd20 * SCALE;
+localparam signed SCALE = 256;
 
-localparam signed [23:0] TABLE_POS [2:0] = '{24'd0 * SCALE, 24'd1370 * SCALE, 24'd740 * SCALE};
-localparam signed [23:0] NET_POS [2:0] = '{24'd762 * SCALE, 24'd1370 * SCALE, 24'd15 * SCALE};
-localparam signed [23:0] PADDLE1_POS [2:0] = '{24'd0 * SCALE, 24'd0 * SCALE, 24'd790 * SCALE};
-localparam signed [23:0] PADDLE2_POS [2:0] = '{24'd0 * SCALE, 24'd2740 * SCALE, 24'd790 * SCALE};
-localparam signed [23:0] BALL_POS [2:0] = '{24'd0 * SCALE, 24'd1370 * SCALE, 24'd870 * SCALE};
+localparam signed TABLE_dX = 24'd762 * SCALE;
+localparam signed TABLE_dY = 24'd1370 * SCALE;
+localparam signed TABLE_dZ = 24'd15 * SCALE;
 
-localparam signed [23:0] BALL_VEL [2:0] = '{24'd0.03 * SCALE, 24'd-0.8 * SCALE, 24'd0 * SCALE};
+localparam signed NET_dX = 24'd762 * SCALE;
+localparam signed NET_dY = 24'd10 * SCALE;
+localparam signed NET_dZ = 24'd30 * SCALE;
 
-localparam Gravity = -1;
+localparam signed PADDLE_dX = 24'd60 * SCALE;
+localparam signed PADDLE_dY = 24'd10 * SCALE;
+localparam signed PADDLE_dZ = 24'd70 * SCALE;
 
-localparam Loss = 0.9; // Loss of energy in each collision, Need to figure out how to implement using integer math
+localparam signed [23:0] BALL_RADIUS = 24'd20 * SCALE;
 
-localparam signed BOUNDS_X [1:0] = '{24'd0 * SCALE, 24'd640 * SCALE};
-localparam signed BOUNDS_Y [1:0] = '{24'd0 * SCALE, 24'd480 * SCALE};
-localparam signed BOUNDS_Z [1:0] = '{24'd0 * SCALE, 24'd480 * SCALE};
+localparam signed TABLE_X = 24'd0 * SCALE;
+localparam signed TABLE_Y = 24'd1370 * SCALE;
+localparam signed TABLE_Z = 24'd740 * SCALE;
+
+localparam signed NET_X = 24'd762 * SCALE;
+localparam signed NET_Y = 24'd1370 * SCALE;
+localparam signed NET_Z = 24'd15 * SCALE;
+
+localparam signed PADDLE1_X = 24'd0 * SCALE;
+localparam signed PADDLE1_Y = 24'd0 * SCALE;
+localparam signed PADDLE1_Z = 24'd790 * SCALE;
+
+localparam signed PADDLE2_X = 24'd0 * SCALE;
+localparam signed PADDLE2_Y = 24'd2740 * SCALE;
+localparam signed PADDLE2_Z = 24'd790 * SCALE;
+
+localparam signed BALL_X = 24'd0 * SCALE;
+localparam signed BALL_Y = 24'd1370 * SCALE;
+localparam signed BALL_Z = 24'd840 * SCALE;
+
+localparam signed BALL_VEL_X = 24'd4;
+localparam signed BALL_VEL_Y = -24'd205;
+localparam signed BALL_VEL_Z = 24'd0;
+
+localparam signed Gravity = -1;
+
+localparam signed Loss = 1; // Loss of energy in each collision, Need to figure out how to implement using integer math
+
+localparam signed BOUNDS_X1 = -24'd1000 * SCALE;
+localparam signed BOUNDS_X2 = 24'd1000 * SCALE;
+localparam signed BOUNDS_Y1 = -24'd1000 * SCALE;
+localparam signed BOUNDS_Y2 = 24'd4000 * SCALE;
+localparam signed BOUNDS_Z1 = 24'd0 * SCALE;
+localparam signed BOUNDS_Z2 = 24'd1200 * SCALE;
+
+localparam UPDATE_COUNT_PER_FRAME = 'd5;
+localparam CYCLES_PER_FRAME = 100_000_000/60;
+localparam DELAY_TIME = CYCLES_PER_FRAME / UPDATE_COUNT_PER_FRAME;
 
 // Control Registers
 // Video Processing can write to these registers to control the physics engine
@@ -88,12 +124,12 @@ reg signed [23:0] ball_velocity_Z_reset;
 
 // Physics state registers
 // Microblaze can read these registers to get the current state of the physics engine
-reg signed [23:0]  paddle_1_X_p1; 
-reg signed [23:0]  paddle_1_Y_p1; 
+reg signed [23:0]  paddle_1_X_p1;
+reg signed [23:0]  paddle_1_Y_p1;
 reg signed [23:0]  paddle_1_Z_p1;
 
-reg signed [23:0]  paddle_2_X_p1; 
-reg signed [23:0]  paddle_2_Y_p1;  
+reg signed [23:0]  paddle_2_X_p1;
+reg signed [23:0]  paddle_2_Y_p1;
 reg signed [23:0]  paddle_2_Z_p1;
    
 reg signed [23:0] paddle_1_velocity_X;
@@ -116,11 +152,7 @@ reg signed [23:0] ball_X_p1_new;
 reg signed [23:0] ball_Y_p1_new;
 reg signed [23:0] ball_Z_p1_new;
 
-reg signed [23:0] ball_velocity_X_new;
-reg signed [23:0] ball_velocity_Y_new;
-reg signed [23:0] ball_velocity_Z_new;
-
-reg ball_impact_side; // Indicates which plaer side last impacted the ball
+reg ball_impact_side; // Indicates which player side last impacted the ball
 reg within_bounds; // Indicates if the ball is within the bounds of the table
 
 // Collision result registers
@@ -128,20 +160,26 @@ reg collide_paddle_1; // Indicates if the ball has collided
 reg collide_paddle_2;
 reg collide_table;
 reg collide_net;
+reg collide_bounds;
+
+// Delay Counter
+reg [19:0] delay_counter;
 
 // State machine
 reg [3:0] state;
 
-parameter [3:0] START               = 4'd0,
-                NEW_BALL_POSITION   = 4'd1,
-                BALL_COLLISION      = 4'd2,
+parameter [3:0] 
+                IDLE                = 4'd0,
+                START               = 4'd1,
+                NEW_BALL_POSITION   = 4'd2,
+                BALL_COLLISION      = 4'd3,
 
-                PADDLE_1_COLLISION  = 4'd3,
-                PADDLE_2_COLLISION  = 4'd4,
-                TABLE_COLLISION     = 4'd5,
-                NET_COLLISION       = 4'd6,
+                PADDLE_1_COLLISION  = 4'd4,
+                PADDLE_2_COLLISION  = 4'd5,
+                TABLE_COLLISION     = 4'd6,
+                NET_COLLISION       = 4'd7,
 
-                UPDATE_BALL_POS     = 4'd3;
+                UPDATE_BALL_POS     = 4'd8;
 
 /////////////////////////////////////////////////////////////////////////////
 ///////////////////////////// Control Registers /////////////////////////////
@@ -164,12 +202,20 @@ always @(posedge aclk) begin
         ball_velocity_Y_reset <= 0;
         ball_velocity_Z_reset <= 0;
     end else begin
+        // IP input
         if(ip_pc_paddle_1_valid) begin
             ip_pc_paddle_1_valid_r <= 1;
         end
         if(ip_pc_paddle_2_valid) begin
             ip_pc_paddle_2_valid_r <= 1;
         end
+
+        // Microblaze input
+        if(~within_bounds) begin
+            game_run <= 0;
+        end
+
+        // TODO: Implement AXI-Lite interface
     end
 end
 
@@ -177,16 +223,35 @@ end
 //////////////// Ball's Collision detection & its Position //////////////////
 /////////////////////////////////////////////////////////////////////////////
 
+wire debug_table_collision_x1;
+wire debug_table_collision_x2;
+wire debug_table_collision_y1;
+wire debug_table_collision_y2;
+wire debug_table_collision_z1;
+wire debug_table_collision_z2;
+
+wire signed [23:0] debug_table_1;
+wire signed [23:0] debug_table_2;
+assign debug_table_1 = TABLE_X - TABLE_dX - BALL_RADIUS;
+assign debug_table_2 = TABLE_Y - TABLE_dY - BALL_RADIUS;
+
+assign debug_table_collision_x1 = ball_X_p1_new > (TABLE_X - TABLE_dX - BALL_RADIUS);
+assign debug_table_collision_x2 = ball_X_p1_new < (TABLE_X + TABLE_dX + BALL_RADIUS);
+assign debug_table_collision_y1 = ball_Y_p1_new > (TABLE_Y - TABLE_dY - BALL_RADIUS);
+assign debug_table_collision_y2 = ball_Y_p1_new < (TABLE_Y + TABLE_dY + BALL_RADIUS);
+assign debug_table_collision_z1 = ball_Z_p1_new > (TABLE_Z - TABLE_dZ - BALL_RADIUS);
+assign debug_table_collision_z2 = ball_Z_p1_new < (TABLE_Z + TABLE_dZ + BALL_RADIUS);
+
 always @(posedge aclk) begin
    if (~aresetn) begin
         // Physics state registers
-        paddle_1_X_p1 <= PADDLE1_POS[0];
-        paddle_1_Y_p1 <= PADDLE1_POS[1];
-        paddle_1_Z_p1 <= PADDLE1_POS[2];
+        paddle_1_X_p1 <= PADDLE1_X;
+        paddle_1_Y_p1 <= PADDLE1_Y;
+        paddle_1_Z_p1 <= PADDLE1_Z;
 
-        paddle_2_X_p1 <= PADDLE2_POS[0];
-        paddle_2_Y_p1 <= PADDLE2_POS[1];
-        paddle_2_Z_p1 <= PADDLE2_POS[2];
+        paddle_2_X_p1 <= PADDLE2_X;
+        paddle_2_Y_p1 <= PADDLE2_Y;
+        paddle_2_Z_p1 <= PADDLE2_Z;
         
         paddle_1_velocity_X <= 0;
         paddle_1_velocity_Y <= 0;
@@ -196,35 +261,44 @@ always @(posedge aclk) begin
         paddle_2_velocity_Y <= 0;
         paddle_2_velocity_Z <= 0;
 
-        ball_X_p1 <= BALL_POS[0];
-        ball_Y_p1 <= BALL_POS[1];
-        ball_Z_p1 <= BALL_POS[2];
+        ball_X_p1 <= BALL_X;
+        ball_Y_p1 <= BALL_Y;
+        ball_Z_p1 <= BALL_Z;
 
-        ball_velocity_X <= BALL_VEL[0];
-        ball_velocity_Y <= BALL_VEL[1];
-        ball_velocity_Z <= BALL_VEL[2];
+        ball_velocity_X <= BALL_VEL_X;
+        ball_velocity_Y <= BALL_VEL_Y;
+        ball_velocity_Z <= BALL_VEL_Z;
 
         ball_X_p1_new <= 0;
         ball_Y_p1_new <= 0;
         ball_Z_p1_new <= 0;
 
-        ball_velocity_X_new <= 0;
-        ball_velocity_Y_new <= 0;
-        ball_velocity_Z_new <= 0;
-
-        reg ball_impact_side <= 0;
-        reg within_bounds <= 1;
+        ball_impact_side <= 0;
+        within_bounds <= 1;
 
         // Collision result registers
-        reg collide_paddle_1 <= 0;
-        reg collide_paddle_2 <= 0;
-        reg collide_table <= 0;
-        reg collide_net <= 0;
+        collide_paddle_1 <= 0;
+        collide_paddle_2 <= 0;
+        collide_table <= 0;
+        collide_net <= 0;
+        collide_bounds <= 0;
+        
+        // Delay counter
+        delay_counter <= 0;
 
         // State machine
-        reg [3:0] state <= START;
-    end else begin
+        state <= START;
+    end 
+    else begin
         case (state)
+            IDLE : begin
+                if(start) begin
+                    state <= START;
+                end
+                else begin
+                    state <= IDLE;
+                end
+            end
             START : begin
                 // TODO: Don't set velocity every time, only when a new position is provided
                 if (ip_pc_paddle_1_valid) begin
@@ -244,19 +318,23 @@ always @(posedge aclk) begin
                         paddle_2_Z_p1	    <= ip_pc_paddle_2_Z;
                 end
 
-                if(reset) begin
+                if(game_reset) begin
                     ball_X_p1 <= ball_X_reset;
                     ball_Y_p1 <= ball_Y_reset;
                     ball_Z_p1 <= ball_Z_reset;
                     ball_velocity_X <= ball_velocity_X_reset;
                     ball_velocity_Y <= ball_velocity_Y_reset;
                     ball_velocity_Z <= ball_velocity_Z_reset;
+                    within_bounds <= 1;
                 end
-                if(!game_run) begin
-                    state <= START;
+
+                if(game_run && (delay_counter > DELAY_TIME)) begin
+                    state <= NEW_BALL_POSITION;
+                    delay_counter <= 0;
                 end
                 else begin
-                    state <= NEW_BALL_POSITION;
+                    state <= START;
+                    delay_counter <= delay_counter + 1;
                 end
             end
             NEW_BALL_POSITION: begin
@@ -264,18 +342,20 @@ always @(posedge aclk) begin
                 ball_Y_p1_new <= ball_Y_p1 + ball_velocity_Y;
                 ball_Z_p1_new <= ball_Z_p1 + ball_velocity_Z;
                 state <= BALL_COLLISION;
+                
+                delay_counter <= delay_counter + 1;
             end
             BALL_COLLISION: begin
                 // Detect Ball Collision. Priority order is Table, Paddle 1, Paddle 2, Net
-                if( ball_X_p1_new > ((TABLE_POS[0] - TABLE_DIMS[0] - BALL_RADIUS)) &&
-                    ball_X_p1_new < (TABLE_POS[0] + TABLE_DIMS[0] + BALL_RADIUS) &&
-                    ball_Y_p1_new > ((TABLE_POS[1] - TABLE_DIMS[1] - BALL_RADIUS)) &&
-                    ball_Y_p1_new < (TABLE_POS[1] + TABLE_DIMS[1] + BALL_RADIUS) &&
-                    ball_Z_p1_new > ((TABLE_POS[2] - TABLE_DIMS[2] - BALL_RADIUS)) &&
-                    ball_Z_p1_new < (TABLE_POS[2] + TABLE_DIMS[2] + BALL_RADIUS)) begin
+                if( (ball_X_p1_new > (TABLE_X - TABLE_dX - BALL_RADIUS)) &&
+                    (ball_X_p1_new < (TABLE_X + TABLE_dX + BALL_RADIUS)) &&
+                    (ball_Y_p1_new > (TABLE_Y - TABLE_dY - BALL_RADIUS)) &&
+                    (ball_Y_p1_new < (TABLE_Y + TABLE_dY + BALL_RADIUS)) &&
+                    (ball_Z_p1_new > (TABLE_Z - TABLE_dZ - BALL_RADIUS)) &&
+                    (ball_Z_p1_new < (TABLE_Z + TABLE_dZ + BALL_RADIUS)))begin
                     
                     collide_table <= 1;
-                    if(ball_Y_p1_new > TABLE_POS[1]) begin
+                    if(ball_Y_p1_new > TABLE_Y) begin
                         ball_impact_side <= 1;
                     end
                     else begin
@@ -283,86 +363,100 @@ always @(posedge aclk) begin
                     end
                     state <= TABLE_COLLISION;
                 end
-                else if(ball_X_p1_new > (paddle_1_X_p1 - PADDLE_DIMS[0] - BALL_RADIUS) &&
-                        ball_X_p1_new < (paddle_1_X_p1 + PADDLE_DIMS[0] + BALL_RADIUS) &&
-                        ball_Y_p1_new > (paddle_1_Y_p1 - PADDLE_DIMS[1] - BALL_RADIUS) &&
-                        ball_Y_p1_new < (paddle_1_Y_p1 + PADDLE_DIMS[1] + BALL_RADIUS) &&
-                        ball_Z_p1_new > (paddle_1_Z_p1 - BALL_RADIUS) &&
-                        ball_Z_p1_new < (paddle_1_Z_p1 + PADDLE_DIMS[2] + BALL_RADIUS)) begin
-                    
+                else if(ball_X_p1_new > (paddle_1_X_p1 - PADDLE_dX - BALL_RADIUS) &&
+                        ball_X_p1_new < (paddle_1_X_p1 + PADDLE_dX + BALL_RADIUS) &&
+                        ball_Y_p1_new > (paddle_1_Y_p1 - PADDLE_dY - BALL_RADIUS) &&
+                        ball_Y_p1_new < (paddle_1_Y_p1 + PADDLE_dY + BALL_RADIUS) &&
+                        ball_Z_p1_new > (paddle_1_Z_p1 - PADDLE_dZ - BALL_RADIUS) &&
+                        ball_Z_p1_new < (paddle_1_Z_p1 + PADDLE_dZ + BALL_RADIUS)) begin
                     collide_paddle_1 <= 1;
                     state <= PADDLE_1_COLLISION;
                 end
-                else if(ball_X_p1_new > (paddle_2_X_p1 - PADDLE_DIMS[0] - BALL_RADIUS) &&
-                        ball_X_p1_new < (paddle_2_X_p1 + PADDLE_DIMS[0] + BALL_RADIUS) &&
-                        ball_Y_p1_new > (paddle_2_Y_p1 - PADDLE_DIMS[1] - BALL_RADIUS) &&
-                        ball_Y_p1_new < (paddle_2_Y_p1 + PADDLE_DIMS[1] + BALL_RADIUS) &&
-                        ball_Z_p1_new > (paddle_2_Z_p1 - BALL_RADIUS) &&
-                        ball_Z_p1_new < (paddle_2_Z_p1 + PADDLE_DIMS[2] + BALL_RADIUS)) begin
-                    
+                else if(ball_X_p1_new > (paddle_2_X_p1 - PADDLE_dX - BALL_RADIUS) &&
+                        ball_X_p1_new < (paddle_2_X_p1 + PADDLE_dX + BALL_RADIUS) &&
+                        ball_Y_p1_new > (paddle_2_Y_p1 - PADDLE_dY - BALL_RADIUS) &&
+                        ball_Y_p1_new < (paddle_2_Y_p1 + PADDLE_dY + BALL_RADIUS) &&
+                        ball_Z_p1_new > (paddle_2_Z_p1 - PADDLE_dZ - BALL_RADIUS) &&
+                        ball_Z_p1_new < (paddle_2_Z_p1 + PADDLE_dZ + BALL_RADIUS)) begin
                     collide_paddle_2 <= 1;
                     state <= PADDLE_2_COLLISION;
                 end
-                else if(ball_X_p1_new > (NET_POS[0] - NET_DIMS[0] - BALL_RADIUS) &&
-                        ball_X_p1_new < (NET_POS[0] + NET_DIMS[0] + BALL_RADIUS) &&
-                        ball_Y_p1_new > (NET_POS[1] - NET_DIMS[1] - BALL_RADIUS) &&
-                        ball_Y_p1_new < (NET_POS[1] + NET_DIMS[1] + BALL_RADIUS) &&
-                        ball_Z_p1_new > (NET_POS[2] - BALL_RADIUS) &&
-                        ball_Z_p1_new < (NET_POS[2] + NET_DIMS[2] + BALL_RADIUS)) begin
-                    
+                else if(ball_X_p1_new > (NET_X - NET_dX - BALL_RADIUS) &&
+                        ball_X_p1_new < (NET_X + NET_dX + BALL_RADIUS) &&
+                        ball_Y_p1_new > (NET_Y - NET_dY - BALL_RADIUS) &&
+                        ball_Y_p1_new < (NET_Y + NET_dY + BALL_RADIUS) &&
+                        ball_Z_p1_new > (NET_Z - NET_dZ - BALL_RADIUS) &&
+                        ball_Z_p1_new < (NET_Z + NET_dZ + BALL_RADIUS)) begin
                     collide_net <= 1;
                     state <= NET_COLLISION;
+                end
+                else if(ball_X_p1_new < (BOUNDS_X1) ||
+                        ball_X_p1_new > (BOUNDS_X2) ||
+                        ball_Y_p1_new < (BOUNDS_Y1) ||
+                        ball_Y_p1_new > (BOUNDS_Y2) ||
+                        ball_Z_p1_new < (BOUNDS_Z1) ||
+                        ball_Z_p1_new > (BOUNDS_Z2)) begin
+                    collide_bounds <= 1;
+                    within_bounds <= 0;
+                    state <= IDLE;
                 end
                 else begin
                     collide_paddle_1 <= 0;
                     collide_paddle_2 <= 0;
                     collide_table <= 0;
                     collide_net <= 0;
+                    collide_bounds <= 0;
                     state <= UPDATE_BALL_POS;
                 end
+                
+                delay_counter <= delay_counter + 1;
             end
 
             // TODO: Implement loss of energy in each collision
+            // TODO: Check if the ball bounces on the same side twice
             TABLE_COLLISION: begin
-                ball_velocity_X_new <= ball_velocity_X;
-                ball_velocity_Y_new <= ball_velocity_Y;
-                ball_velocity_Z_new <= -ball_velocity_Z;
+                ball_velocity_X <= ball_velocity_X;
+                ball_velocity_Y <= ball_velocity_Y;
+                ball_velocity_Z <= -ball_velocity_Z;
 
                 state <= UPDATE_BALL_POS;
+                
+                delay_counter <= delay_counter + 1;
             end
 
             // TODO: Update to change the way the game feels
             PADDLE_1_COLLISION: begin
-                ball_velocity_X_new <= ball_velocity_X;
-                ball_velocity_Y_new <= -ball_velocity_Y;
-                ball_velocity_Z_new <= ball_velocity_Z;
+                ball_velocity_X <= ball_velocity_X;
+                ball_velocity_Y <= -ball_velocity_Y;
+                ball_velocity_Z <= ball_velocity_Z;
 
                 state <= UPDATE_BALL_POS;
+                
+                delay_counter <= delay_counter + 1;
             end
 
             // TODO: Update to change the way the game feels
             PADDLE_2_COLLISION: begin
-                ball_velocity_X_new <= ball_velocity_X;
-                ball_velocity_Y_new <= -ball_velocity_Y;
-                ball_velocity_Z_new <= ball_velocity_Z;
+                ball_velocity_X <= ball_velocity_X;
+                ball_velocity_Y <= -ball_velocity_Y;
+                ball_velocity_Z <= ball_velocity_Z;
 
                 state <= UPDATE_BALL_POS;
+                
+                delay_counter <= delay_counter + 1;
             end
 
             NET_COLLISION: begin
-                ball_velocity_X_new <= ball_velocity_X;
-                ball_velocity_Y_new <= ball_velocity_Y;
-                ball_velocity_Z_new <= -ball_velocity_Z;
+                ball_velocity_X <= ball_velocity_X;
+                ball_velocity_Y <= ball_velocity_Y;
+                ball_velocity_Z <= -ball_velocity_Z;
 
                 state <= UPDATE_BALL_POS;
+                
+                delay_counter <= delay_counter + 1;
             end
 
-	        BALL_COLLISION : begin
-                if(collide_paddle_1 || collide_paddle_2 || collide_table || collide_net) begin
-                    ball_velocity_X <= ball_velocity_X_new;
-                    ball_velocity_Y <= ball_velocity_Y_new;
-                    ball_velocity_Z <= ball_velocity_Z_new;
-                end
+	        UPDATE_BALL_POS : begin
                 ball_X_p1 <= ball_X_p1 + ball_velocity_X;
                 ball_Y_p1 <= ball_Y_p1 + ball_velocity_Y;
                 ball_Z_p1 <= ball_Z_p1 + ball_velocity_Z;
@@ -370,6 +464,13 @@ always @(posedge aclk) begin
                 ball_velocity_Z <= ball_velocity_Z + Gravity;
 
                 state <= START;
+                
+                delay_counter <= delay_counter + 1;
+            end
+            default: begin
+                state <= START;
+                
+                delay_counter <= delay_counter + 1;
             end
         endcase
     end
